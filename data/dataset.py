@@ -1,22 +1,24 @@
+import os
 import torch
 from torch.utils.data import Dataset
 import numpy as np
-import os
 from .preprocessing import (
-    preprocess_eeg, compute_spectrogram, compute_adjacency,
-    clean_text, load_reddit_data, load_clpsych_data,
-    load_tuh_eeg, load_physionet_mi, create_pairs
+    load_tuh_eeg, load_physionet_mi, load_reddit_data, load_clpsych_data,
+    create_pairs, compute_spectrogram, compute_adjacency, clean_text
 )
 
 class EEGDataset(Dataset):
+    """EEG dataset with preprocessed signals, spectrograms, and adjacency matrices."""
     def __init__(self, data_dir, dataset_name, split='train', transform=True):
         """
-        dataset_name: 'tuh' or 'physionet'
-        split: 'train', 'val', 'test' (for splitting, we assume pre-split files)
+        Args:
+            data_dir: root data directory (e.g., 'data/raw')
+            dataset_name: 'tuh' or 'physionet'
+            split: 'train', 'val', 'test' (assumes files are already split)
+            transform: if True, precompute spectrogram/adjacency (else compute on the fly)
         """
         self.transform = transform
         self.segments, self.labels = self._load(data_dir, dataset_name, split)
-        # Precompute spectrograms and adjacency if needed
         self.spectrograms = []
         self.adjacencies = []
         for seg in self.segments:
@@ -25,20 +27,14 @@ class EEGDataset(Dataset):
                 adj = compute_adjacency(seg)
                 self.spectrograms.append(spec)
                 self.adjacencies.append(adj)
-            else:
-                self.spectrograms.append(None)
-                self.adjacencies.append(None)
 
     def _load(self, data_dir, dataset_name, split):
         if dataset_name == 'tuh':
-            segs, labs = load_tuh_eeg(data_dir)
+            segs, labs = load_tuh_eeg(data_dir, split)
         elif dataset_name == 'physionet':
-            segs, labs = load_physionet_mi(data_dir)
+            segs, labs = load_physionet_mi(data_dir, split)
         else:
-            raise ValueError
-        # split: assume segs are already split by subject; we use provided indices
-        # For simplicity, we use a fixed split ratio defined elsewhere.
-        # In practice, you would load split-specific files.
+            raise ValueError(f"Unknown dataset: {dataset_name}")
         return segs, labs
 
     def __len__(self):
@@ -60,14 +56,14 @@ class EEGDataset(Dataset):
         }
 
 class TextDataset(Dataset):
+    """Text dataset with cleaned text and labels."""
     def __init__(self, data_dir, dataset_name, split='train'):
         if dataset_name == 'reddit':
-            self.texts, self.labels = load_reddit_data(data_dir)
+            self.texts, self.labels = load_reddit_data(data_dir, split)
         elif dataset_name == 'clpsych':
-            self.texts, self.labels = load_clpsych_data(data_dir)
+            self.texts, self.labels = load_clpsych_data(data_dir, split)
         else:
-            raise ValueError
-        # Clean texts
+            raise ValueError(f"Unknown dataset: {dataset_name}")
         self.texts = [clean_text(t) for t in self.texts]
 
     def __len__(self):
@@ -81,17 +77,17 @@ class TextDataset(Dataset):
 
 class MultimodalDataset(Dataset):
     """
-    Combines EEG and text datasets with weak supervision.
-    Returns a batch of EEG-text pairs (positive pairs) according to class-level pairing.
+    Weakly supervised dataset that pairs EEG segments with text samples of the same class.
+    For each EEG segment, k text samples are paired as positive samples.
     """
     def __init__(self, eeg_dataset, text_dataset, k=3):
         self.eeg_dataset = eeg_dataset
         self.text_dataset = text_dataset
         self.k = k
-        # Build pairing indices
+        # Pre-extract labels
         eeg_labels = [self.eeg_dataset[i]['label'].item() for i in range(len(self.eeg_dataset))]
         text_labels = [self.text_dataset[i]['label'].item() for i in range(len(self.text_dataset))]
-        self.pairs = create_pairs(eeg_labels, text_labels, k)
+        self.pairs = create_pairs(eeg_labels, text_labels, k)   # list of (eeg_idx, list_of_text_idx)
 
     def __len__(self):
         return len(self.pairs)
@@ -99,16 +95,15 @@ class MultimodalDataset(Dataset):
     def __getitem__(self, idx):
         eeg_idx, text_idxs = self.pairs[idx]
         eeg_item = self.eeg_dataset[eeg_idx]
-        # For each positive pair, we return one EEG and one text (randomly chosen from k)
-        # In contrastive learning, we will handle the k samples separately.
-        # For simplicity, we return one text per EEG, but the training loop can also use the k.
-        text_idx = text_idxs[0]  # use the first; in training you can iterate over k
+        # For simplicity, return one text from the k positives (the first one)
+        # In contrastive learning, we can use the k texts in the loss by expanding.
+        text_idx = text_idxs[0]
         text_item = self.text_dataset[text_idx]
         return {
             'eeg_signal': eeg_item['signal'],
             'eeg_spectrogram': eeg_item['spectrogram'],
             'eeg_adjacency': eeg_item['adjacency'],
             'text': text_item['text'],
-            'eeg_label': eeg_item['label'],
-            'text_label': text_item['label']
+            'label': eeg_item['label'],   # same as text_item['label']
+            'modality_label': torch.tensor(0, dtype=torch.long)  # placeholder, not used directly
         }
