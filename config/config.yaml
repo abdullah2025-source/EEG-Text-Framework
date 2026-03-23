@@ -2,17 +2,26 @@ model:
   d_model: 512
   nhead: 8
   num_layers: 4
-  eeg_input_dim: 64   # number of EEG channels
+  eeg_channels: 64
+  time_points: 256
   bert_model: "emilyalsentzer/Bio_ClinicalBERT"
+  lexicon_path: "data/lexicon/transE_embeddings.npy"   # precomputed symbolic embeddings
+  temperature: 0.07
 
 training:
   batch_size: 32
-  lr: 1e-4
+  lr_eeg: 1e-4
+  lr_text: 5e-5
+  lr_align: 1e-4
   epochs: 100
-  temperature: 0.07
+  gradient_clip: 5.0
+  dropout: 0.3
 
 data:
-  tuh_path: "data/TUH"
-  physionet_path: "data/PhysioNet"
-  reddit_path: "data/Reddit"
-  clpsych_path: "data/CLPsych"
+  tuh_path: "data/raw/TUH"
+  physionet_path: "data/raw/PhysioNet"
+  reddit_path: "data/raw/Reddit"
+  clpsych_path: "data/raw/CLPsych"
+  daic_path: "data/raw/DAIC-WOZ"
+  test_split: 0.1
+  val_split: 0.1
